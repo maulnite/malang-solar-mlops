@@ -33,7 +33,7 @@ For each forecast:
 residual = ERA5 reference GHI - raw forecast GHI
 ```
 
-The machine learning model predicts this residual, and the final forecast is calculated as:
+The machine learning model predicts this residual, and the corrected forecast is calculated as:
 
 ```text
 corrected GHI = raw forecast GHI + predicted residual
@@ -78,7 +78,7 @@ Forecast features include:
 
 ERA5 is treated as a **reference / proxy ground truth**, not as a direct physical sensor measurement from a pyranometer in Malang.
 
-Because ERA5 becomes available after a delay, model performance monitoring is designed to operate asynchronously: predictions are stored first and evaluated after their corresponding reference values become available.
+Because ERA5 becomes available after a delay, model performance monitoring is designed to operate asynchronously. Predictions are stored first and evaluated after their corresponding ERA5 reference values become available.
 
 ---
 
@@ -86,7 +86,7 @@ Because ERA5 becomes available after a delay, model performance monitoring is de
 
 Before finalizing the operational data pipeline, an initial feasibility study was conducted using the Open-Meteo Historical Forecast API and ERA5.
 
-The historical test dataset covered:
+The historical feasibility dataset covered:
 
 ```text
 2023-01-01 → 2026-08-17
@@ -108,7 +108,7 @@ Training : 2023 → 2025
 Testing  : 2026
 ```
 
-Evaluation was restricted to daylight observations to avoid artificially low errors from nighttime GHI values near zero.
+Evaluation was restricted to daylight observations to avoid artificially low errors caused by nighttime GHI values near zero.
 
 ### Initial Results
 
@@ -152,9 +152,10 @@ flowchart LR
 
 The final system is planned to incorporate:
 
-| Component | Planned Technology |
+| Component | Technology |
 |---|---|
 | Source control | GitHub |
+| Development environment | GitHub Codespaces |
 | Workflow automation | GitHub Actions |
 | Data versioning | DVC |
 | Experiment tracking | MLflow |
@@ -164,6 +165,117 @@ The final system is planned to incorporate:
 | Service orchestration | Docker Compose |
 | Metrics collection | Prometheus |
 | Monitoring dashboard | Grafana |
+
+---
+
+## Development Environment
+
+The repository provides a reproducible cloud-based development environment using **GitHub Codespaces** and a repository-level Dev Container configuration.
+
+The environment is defined in:
+
+```text
+.devcontainer/devcontainer.json
+```
+
+The current Codespaces setup provides:
+
+- Python 3.11,
+- automatic dependency installation from `requirements.txt`,
+- Python development support,
+- Pylance,
+- Jupyter support,
+- and Ruff for Python linting and formatting.
+
+Dependencies are automatically installed when a new Codespace is created.
+
+### Codespaces Validation
+
+The configured environment has been validated using:
+
+```bash
+python --version
+```
+
+Expected environment:
+
+```text
+Python 3.11.x
+```
+
+Project dependencies can be validated using:
+
+```bash
+python -c "import numpy, pandas, requests, sklearn; print('Dependencies OK')"
+```
+
+Expected result:
+
+```text
+Dependencies OK
+```
+
+The repository has also been verified to open successfully inside GitHub Codespaces with the standardized project structure available.
+
+This ensures that contributors can reproduce the same Python environment without manually configuring dependencies on their local machine.
+
+---
+
+## Branching Strategy
+
+This repository follows a lightweight **GitHub Flow** strategy.
+
+The `main` branch is treated as the stable integration branch. Development work is performed on dedicated branches before being merged through a Pull Request.
+
+Branch naming conventions:
+
+```text
+feat/<feature-name>   → new feature or experiment
+fix/<bug-name>        → bug fix
+chore/<task-name>     → infrastructure or maintenance task
+docs/<topic-name>     → documentation changes
+```
+
+Example workflow:
+
+```text
+main
+  │
+  └── feat/lk02-infrastructure
+          │
+          ├── project structure setup
+          ├── Codespaces configuration
+          ├── environment validation
+          └── documentation update
+                  │
+                  ▼
+             Pull Request
+                  │
+             validation
+                  │
+                  ▼
+                main
+```
+
+Example commands:
+
+```bash
+git switch main
+git pull origin main
+git switch -c feat/example-feature
+```
+
+After making changes:
+
+```bash
+git add .
+git commit -m "feat: describe the implemented feature"
+git push -u origin feat/example-feature
+```
+
+A Pull Request is then created from the feature branch into `main`.
+
+Changes should be validated before being merged into the stable branch.
 
 ---
 
@@ -179,11 +291,15 @@ Candidate retraining can be triggered by:
 
 Retraining does not automatically replace the production model.
 
-A newly trained **challenger** must first be evaluated against the current **champion** using recent temporally held-out data. Only a challenger that satisfies the model acceptance criteria will be promoted.
+A newly trained **challenger** must first be evaluated against the current **champion** using recent temporally held-out data.
+
+Only a challenger that satisfies the model acceptance criteria will be promoted.
 
 ---
 
 ## Monitoring Strategy
+
+The future production system is designed to monitor three main areas.
 
 ### Model Performance
 
@@ -208,16 +324,34 @@ A newly trained **challenger** must first be evaluated against the current **cha
 - Inference latency
 - Data ingestion status
 
-Prometheus will collect operational metrics, while Grafana will provide the monitoring dashboard.
+Prometheus will collect operational metrics, while Grafana will provide monitoring dashboards.
 
 ---
 
 ## Repository Structure
 
-Current repository structure:
+The repository currently follows a standardized ML/MLOps project structure:
 
 ```text
 malang-solar-mlops/
+│
+├── .devcontainer/
+│   └── devcontainer.json
+│
+├── config/
+│   └── .gitkeep
+│
+├── data/
+│   ├── raw/
+│   │   └── .gitkeep
+│   └── processed/
+│       └── .gitkeep
+│
+├── models/
+│   └── .gitkeep
+│
+├── notebooks/
+│   └── .gitkeep
 │
 ├── src/
 │   ├── data/
@@ -227,20 +361,29 @@ malang-solar-mlops/
 │   └── model/
 │       └── sanity_baseline.py
 │
+├── tests/
+│   └── .gitkeep
+│
 ├── .gitignore
-├── requirements.txt
-└── README.md
+├── LICENSE
+├── README.md
+└── requirements.txt
 ```
 
-Planned structure will expand as the project progresses:
+The structure will expand as the MLOps pipeline is implemented:
 
 ```text
 malang-solar-mlops/
 │
+├── .github/
+│   └── workflows/
+│
+├── config/
 ├── data/
 │   ├── raw/
 │   └── processed/
 │
+├── models/
 ├── notebooks/
 │
 ├── src/
@@ -254,12 +397,9 @@ malang-solar-mlops/
 ├── prometheus/
 ├── grafana/
 │
-├── .github/
-│   └── workflows/
-│
 ├── dvc.yaml
-├── docker-compose.yml
 ├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
 └── README.md
 ```
@@ -274,6 +414,10 @@ malang-solar-mlops/
 | Historical data feasibility | ✅ Completed |
 | ERA5 reference feasibility | ✅ Completed |
 | Temporal ML sanity test | ✅ Completed |
+| Standardized repository structure | ✅ Completed |
+| GitHub Codespaces setup | ✅ Completed |
+| Codespaces dependency validation | ✅ Completed |
+| GitHub Flow infrastructure branch | ✅ Completed |
 | ECMWF IFS Single Runs validation | 🚧 In progress |
 | Historical Single Runs audit | ⏳ Planned |
 | Final dataset construction | ⏳ Planned |
@@ -290,22 +434,53 @@ malang-solar-mlops/
 
 ## Getting Started
 
-### Clone the repository
+There are two supported ways to work with this project:
+
+1. GitHub Codespaces
+2. Local Python environment
+
+### Option 1 — GitHub Codespaces
+
+Open the repository on GitHub and select:
+
+```text
+Code
+→ Codespaces
+→ Create codespace
+```
+
+The Dev Container will automatically configure the Python environment and install project dependencies.
+
+Verify the environment:
+
+```bash
+python --version
+```
+
+and:
+
+```bash
+python -c "import numpy, pandas, requests, sklearn; print('Dependencies OK')"
+```
+
+---
+
+### Option 2 — Local Development
+
+Clone the repository:
 
 ```bash
 git clone https://github.com/maulnite/malang-solar-mlops.git
 cd malang-solar-mlops
 ```
 
-### Create a virtual environment
-
-This project currently uses `uv` for Python environment management.
+Create a Python virtual environment using `uv`:
 
 ```bash
 uv venv .venv
 ```
 
-Windows PowerShell:
+Activate the environment on Windows PowerShell:
 
 ```powershell
 .venv\Scripts\Activate.ps1
@@ -317,27 +492,58 @@ Install dependencies:
 uv pip install -r requirements.txt
 ```
 
-### Run the historical feasibility test
+---
+
+## Running Current Experiments
+
+### Historical Data Feasibility Test
 
 ```bash
 python src/data/test_openmeteo_solar.py
 ```
 
-### Test an ECMWF IFS Single Run
+This script evaluates the availability, completeness, and structure of historical forecast and ERA5 data.
+
+---
+
+### ECMWF IFS Single Run Test
 
 ```bash
 python src/data/test_single_run.py
 ```
 
-### Run the initial ML sanity test
+This script is used to validate the final operational forecast source based on ECMWF IFS Single Runs.
 
-Run the historical feasibility script first so that the required local dataset is available.
+---
+
+### Initial ML Sanity Test
+
+The historical feasibility dataset must be generated first.
+
+Then run:
 
 ```bash
 python src/model/sanity_baseline.py
 ```
 
-Generated raw datasets are intentionally excluded from normal Git versioning and will later be managed through DVC.
+The script compares raw forecast performance with several residual-correction models using temporal evaluation.
+
+---
+
+## Data Versioning Policy
+
+Generated datasets are intentionally excluded from normal Git versioning.
+
+Current raw and processed data paths:
+
+```text
+data/raw/
+data/processed/
+```
+
+These directories are preserved in Git using `.gitkeep`, while generated dataset files are ignored through `.gitignore`.
+
+As the project progresses, reproducible training datasets will be versioned using **DVC** rather than stored directly in Git.
 
 ---
 
@@ -345,12 +551,49 @@ Generated raw datasets are intentionally excluded from normal Git versioning and
 
 The repository is currently transitioning from **problem and data-source feasibility** into a complete MLOps implementation.
 
-The next major milestone is to construct and audit the final historical dataset using ECMWF IFS Single Runs, recompute the baseline under the final forecasting setup, and then progressively integrate data versioning, experiment tracking, serving, monitoring, and automated retraining.
+The next major milestones are:
+
+1. validate and audit historical ECMWF IFS Single Runs availability,
+2. construct the final forecast-reference dataset,
+3. establish DVC-based dataset versioning,
+4. track model experiments with MLflow,
+5. containerize and serve the champion model,
+6. monitor system and model performance,
+7. detect drift and performance degradation,
+8. automatically train challenger models,
+9. validate challengers against the current champion,
+10. deploy improved models through an automated workflow.
 
 The long-term objective is a reproducible pipeline capable of:
 
 ```text
-fetch → validate → predict → observe → monitor → retrain → evaluate → deploy
+fetch
+  ↓
+validate
+  ↓
+feature engineering
+  ↓
+predict
+  ↓
+store
+  ↓
+observe
+  ↓
+monitor
+  ↓
+retrain
+  ↓
+evaluate
+  ↓
+deploy
 ```
 
-while keeping the production model versioned, measurable, and replaceable as weather patterns and upstream forecast behavior evolve.
+while keeping the production model, datasets, experiments, and infrastructure versioned and reproducible.
+
+---
+
+## License
+
+This project is licensed under the **MIT License**.
+
+See the `LICENSE` file for details.

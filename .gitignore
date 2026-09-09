@@ -1,8 +1,27 @@
+# Python
 .venv/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Jupyter
 .ipynb_checkpoints/
 
+# Environment / secrets
+.env
+.env.*
+
+# Raw & processed datasets
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+
+# Generated model artifacts
+models/*
+!models/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
