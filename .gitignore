@@ -1,27 +1,51 @@
+# =========================
 # Python
-.venv/
+# =========================
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.ruff_cache/
+*.pyo
 
-# Jupyter
-.ipynb_checkpoints/
+# =========================
+# Virtual Environment
+# =========================
+.venv/
+venv/
 
-# Environment / secrets
-.env
-.env.*
-
-# Raw & processed datasets
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-
-# Generated model artifacts
-models/*
-!models/.gitkeep
-
-# OS / editor
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+
+# =========================
+# Generated Dynamic Data
+# =========================
+
+# Old/local raw CSV artifacts in data/raw root
+data/raw/*.csv
+
+# Operational raw datasets
+data/raw/forecast/**
+data/raw/era5/**
+
+# Generated processed datasets
+data/processed/**
+
+# Small coursework verification sample IS tracked
+!data/raw/sample/
+!data/raw/sample/**
+
+# =========================
+# Model / Experiment Artifacts
+# =========================
+models/*.pkl
+models/*.joblib
+models/*.onnx
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
