@@ -1,6 +1,6 @@
 # Malang Solar MLOps
 
-> An end-to-end MLOps project for short-term solar irradiance forecast correction in Malang, Indonesia, using dynamic meteorological data and continuous training.
+> An end-to-end MLOps project for short-term solar irradiance forecast correction in Malang, Indonesia, using dynamic meteorological data, DVC dataset versioning, and continual-learning workflows.
 
 ---
 
@@ -219,6 +219,14 @@ Validate the main project dependencies:
 python -c "import numpy, pandas, requests, sklearn, pyarrow; print('Dependencies OK')"
 ```
 
+For LK-05, DVC is also required. Verify it in the active environment:
+
+```bash
+dvc --version
+```
+
+Install DVC first if the command is unavailable. Its pinned version should also be added to `requirements.txt` so fresh environments can reproduce the tools used for LK-05.
+
 Expected result:
 
 ```text
@@ -244,7 +252,7 @@ chore/<task-name>     → infrastructure or maintenance task
 docs/<topic-name>     → documentation changes
 ```
 
-Example LK-04 workflow:
+Example feature-branch workflow (LK-04):
 
 ```text
 main
@@ -283,7 +291,7 @@ git commit -m "feat: describe the implemented feature"
 git push -u origin feat/example-feature
 ```
 
-A Pull Request is then created from the feature branch into `main`.
+A Pull Request is then created from the feature branch into `main`. The LK-05 implementation is developed on `feat/lk05-dvc-versioning`, with separate Git commits for the first and second dataset versions.
 
 Changes should be validated before being merged into the stable branch.
 
@@ -340,50 +348,48 @@ Prometheus will collect operational metrics, while Grafana will provide monitori
 
 ## Repository Structure
 
-The repository currently follows the structure below:
+The repository currently follows the modular structure below. Directories holding generated data may be empty in a fresh clone because their content is intentionally not committed to Git.
 
 ```text
 malang-solar-mlops/
-│
 ├── .devcontainer/
 │   └── devcontainer.json
-│
+├── .dvc/
+│   ├── .gitignore
+│   └── config
 ├── config/
-│
 ├── data/
 │   ├── raw/
-│   │   ├── forecast/
-│   │   ├── era5/
-│   │   └── sample/
-│   │
+│   │   ├── forecast/                    # generated ECMWF run snapshots
+│   │   ├── era5/                        # generated ERA5 snapshots
+│   │   ├── sample/
+│   │   │   └── ecmwf_ifs_sample.csv      # small Git-tracked LK-04 sample
+│   │   ├── ecmwf_ifs_history.csv        # DVC-tracked local dataset
+│   │   └── ecmwf_ifs_history.csv.dvc    # Git-tracked DVC pointer
 │   └── processed/
-│       ├── features/
-│       ├── era5/
-│       └── training/
-│
+│       ├── features/                    # generated Parquet features
+│       ├── era5/                        # generated clean ERA5
+│       └── training/                    # planned training dataset
 ├── models/
-│
 ├── notebooks/
-│
 ├── src/
 │   ├── data/
 │   │   ├── ingest_data.py
 │   │   ├── preprocess.py
+│   │   ├── update_history.py
 │   │   ├── test_openmeteo_solar.py
 │   │   └── test_single_run.py
-│   │
 │   └── model/
 │       └── sanity_baseline.py
-│
 ├── tests/
-│
+├── .dvcignore
 ├── .gitignore
 ├── LICENSE
 ├── README.md
 └── requirements.txt
 ```
 
-The structure will continue to expand as model lifecycle, data versioning, serving, monitoring, and workflow automation components are implemented.
+The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and is not part of a normal Git commit. The tracked pointer file is `data/raw/ecmwf_ifs_history.csv.dvc`.
 
 ---
 
@@ -407,7 +413,9 @@ The structure will continue to expand as model lifecycle, data versioning, servi
 | Automated ERA5 preprocessing | ✅ Completed |
 | Basic feature engineering | ✅ Completed |
 | Final forecast-reference dataset construction | ⏳ Planned |
-| DVC data versioning | ⏳ Planned |
+| DVC initialization and local dataset versioning | ✅ Completed |
+| DVC V1 and V2 comparison | ✅ Completed |
+| DVC remote storage | ⏳ Not configured |
 | MLflow experiment tracking | ⏳ Planned |
 | Final model experimentation | ⏳ Planned |
 | Model serving | ⏳ Planned |
@@ -435,7 +443,7 @@ Code
 → Create codespace
 ```
 
-The Dev Container will automatically configure the Python environment and install project dependencies.
+The Dev Container configures the Python environment and installs project dependencies listed in `requirements.txt`. For LK-05, ensure DVC is included in that file or install it separately. Without a DVC remote, a fresh Codespace will have the `.dvc` metadata but **not** the versioned CSV bytes.
 
 Verify the environment:
 
@@ -466,23 +474,31 @@ git clone https://github.com/maulnite/malang-solar-mlops.git
 cd malang-solar-mlops
 ```
 
-Create a Python virtual environment:
+Create a virtual environment with `uv` (Python 3.11):
 
 ```powershell
-py -3.11 -m venv .venv
+uv venv .venv --python 3.11
 ```
 
-Activate the environment on Windows PowerShell:
+Activate it on Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+Install dependencies with `uv`:
 
 ```powershell
-python -m pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
+
+If DVC is not yet included in `requirements.txt`:
+
+```powershell
+uv pip install dvc
+```
+
+`uv`-created environments may not include a `pip` module, so prefer `uv pip install` if `python -m pip` reports `No module named pip`.
 
 Validate dependencies:
 
@@ -847,55 +863,198 @@ The current sanity test is used only to demonstrate that a learnable correction 
 
 ---
 
+## Dataset Versioning with DVC (LK-05)
+
+LK-05 introduces **Data Version Control (DVC)** to track the historical ECMWF forecast dataset independently of Git. This is **dataset versioning**, not yet automated model retraining.
+
+### Tracked Dataset and Data-Flow Separation
+
+Each successful ingestion creates an immutable-by-convention snapshot named after its model initialization time:
+
+```text
+data/raw/forecast/ecmwf_ifs_YYYYMMDDTHHMMZ.csv
+```
+
+To demonstrate data growth while retaining original snapshots, `update_history.py` maintains the aggregated historical CSV:
+
+```text
+data/raw/ecmwf_ifs_history.csv
+```
+
+DVC tracks that aggregate dataset via its Git-committed pointer:
+
+```text
+data/raw/ecmwf_ifs_history.csv.dvc
+```
+
+The three responsibilities remain separate:
+
+```text
+Open-Meteo Single Runs API
+          |
+          v
+src/data/ingest_data.py
+          |
+          v
+data/raw/forecast/           (per-run raw CSV snapshots)
+          |
+          v
+src/data/update_history.py  (append only previously unseen records)
+          |
+          v
+data/raw/ecmwf_ifs_history.csv
+          |
+          v
+dvc add                    (cache data and update .dvc pointer)
+          |
+          v
+Git commit                 (version the pointer alongside code)
+```
+
+`preprocess.py` runs independently on a raw forecast snapshot to validate schema, timestamps, missing values, value ranges, and derive cyclical features. Updating the aggregate history **does not automatically** execute DVC or model retraining; these are currently manual commands.
+
+### Initializing DVC
+
+From the repository root, with DVC installed:
+
+```bash
+dvc init
+```
+
+Commit the DVC configuration generated by initialization (`.dvc/config`, `.dvc/.gitignore`, and `.dvcignore`). The existing repository has already been initialized; **do not repeat `dvc init` for normal use**.
+
+### Dataset V1 — First Historical Snapshot
+
+For the initial LK-05 demonstration, the six-row LK-04 sample was copied into the historical dataset:
+
+```powershell
+Copy-Item data/raw/sample/ecmwf_ifs_sample.csv data/raw/ecmwf_ifs_history.csv
+```
+
+Track it with DVC:
+
+```bash
+dvc add data/raw/ecmwf_ifs_history.csv
+git add .dvc/config .dvc/.gitignore .dvcignore data/raw/ecmwf_ifs_history.csv.dvc
+git commit -m "chore: initialize DVC and track forecast dataset v1"
+```
+
+Recorded LK-05 V1 Git commit: `f0d1ee2`.
+
+### Dataset V2 — Simulated Continual Data Arrival
+
+Fetch the latest run and validate its snapshot:
+
+```bash
+python src/data/ingest_data.py --source forecast
+python src/data/preprocess.py --source forecast
+```
+
+Append records from the latest snapshot to the existing history:
+
+```bash
+python src/data/update_history.py
+```
+
+The update script identifies a unique forecast observation using:
+
+```text
+(source_model, run_time_utc, valid_time_utc)
+```
+
+Rows already present in history are skipped, so repeated execution with the same run is idempotent. You can also select a specific CSV snapshot with `--input`:
+
+```bash
+python src/data/update_history.py --input data/raw/forecast/ecmwf_ifs_20261009T0600Z.csv
+```
+
+For the LK-05 demonstration, the historical dataset expanded from **6 rows in V1 to 12 rows in V2** using two distinct forecast runs. Re-running the update on the same latest snapshot reported `New rows: 0`, confirming duplicate prevention.
+
+Record V2:
+
+```bash
+dvc status
+dvc add data/raw/ecmwf_ifs_history.csv
+git add src/data/update_history.py data/raw/ecmwf_ifs_history.csv.dvc
+git commit -m "feat: version expanded ECMWF forecast dataset v2"
+```
+
+Recorded LK-05 V2 Git commit: `53b3966`.
+
+### Audit, Verification, and Dataset Diff
+
+Inspect local data consistency:
+
+```bash
+python -c "import pandas as pd; d=pd.read_csv('data/raw/ecmwf_ifs_history.csv'); print('Rows:',len(d)); print('Runs:',d['run_time_utc'].nunique()); print('Duplicates:',d.duplicated(['source_model','run_time_utc','valid_time_utc']).sum())"
+```
+
+Inspect repository and DVC status:
+
+```bash
+git status
+dvc status
+```
+
+Compare the two committed dataset versions:
+
+```bash
+dvc diff HEAD~1 HEAD --show-hash
+```
+
+In the LK-05 demonstration, DVC reported **one modified dataset** (`data/raw/ecmwf_ifs_history.csv`) with a changed content hash. The two tracked commits provide a reproducible audit trail **provided the DVC data objects are accessible**.
+
+To inspect metadata for either Git revision directly:
+
+```bash
+git show f0d1ee2:data/raw/ecmwf_ifs_history.csv.dvc
+git show 53b3966:data/raw/ecmwf_ifs_history.csv.dvc
+```
+
+**Important:** `dvc diff` compares tracked file metadata and content hashes; it does not display per-row CSV differences. The row count and duplicate check above independently verify data growth.
+
+### Reproducibility and Current Limitations
+
+- Git tracks the DVC pointer file, DVC configuration, source code, and documentation.
+- DVC stores CSV contents in its **local cache**, not in the Git repository.
+- **No DVC remote is configured yet.** A fresh clone or Codespace cannot restore these dataset versions automatically from GitHub alone. A shared object-storage remote (for example, S3, MinIO, or another DVC-supported backend) and `dvc push`/`dvc pull` would be needed for that workflow.
+- GitHub Actions / cron scheduling, automated `dvc add`, reference joins, MLflow tracking, and continuous retraining are not implemented yet.
+- LK-05 demonstrates an append-only historical dataset and two different tracked versions; it does not yet constitute a complete continually trained production model.
+
+---
+
 ## Data Versioning Policy
 
-Operational raw and processed datasets are generated dynamically and are intentionally excluded from normal Git version control.
-
-Generated data locations include:
+Operational raw forecasts, raw ERA5 references, and processed datasets are generated dynamically. They are not committed as ordinary large Git files:
 
 ```text
 data/raw/forecast/
 data/raw/era5/
-
 data/processed/features/
 data/processed/era5/
 data/processed/training/
 ```
 
-These generated datasets remain local or environment-specific during the current implementation stage.
+The small representative LK-04 sample under `data/raw/sample/` remains Git-tracked for coursework verification.
 
-For LK-04 verification, a small representative raw-data sample may be stored in:
+LK-05 adds a separate **DVC-tracked aggregate history**:
 
-```text
-data/raw/sample/
-```
+| Artifact | Versioned by | Purpose |
+|---|---|---|
+| `src/data/*.py` | Git | Data pipeline source code |
+| `data/raw/sample/ecmwf_ifs_sample.csv` | Git | Small LK-04 evidence file |
+| `data/raw/forecast/*.csv` | Local generated storage | Per-run raw snapshots |
+| `data/raw/ecmwf_ifs_history.csv` | DVC local cache | Aggregated forecast history |
+| `data/raw/ecmwf_ifs_history.csv.dvc` | Git | Hash-based pointer to DVC data |
+| `data/processed/**/*.parquet` | Local generated storage | Clean, feature-ready outputs |
 
-This sample is intentionally committed to Git as coursework evidence, while complete dynamically generated datasets remain excluded through `.gitignore`.
-
-This approach provides two benefits:
-
-```text
-Git
-├── source code
-├── configuration
-├── documentation
-└── small verification sample
-
-Generated datasets
-├── raw forecast snapshots
-├── ERA5 snapshots
-└── processed Parquet datasets
-```
-
-As the project progresses, reproducible training snapshots will be versioned using **DVC**.
-
-DVC will allow dataset versions to be associated with specific Git revisions without storing large generated datasets directly inside the Git repository.
+**Git commits do not upload the historical CSV data itself.** DVC remote storage is a separate, optional future enhancement for sharing complete historical datasets across machines and Codespaces.
 
 ---
 
 ## Current Data Pipeline
 
-The currently implemented LK-04 pipeline is:
+The LK-04 ingestion and preprocessing pipeline is:
 
 ```text
                  Dynamic Data Sources
@@ -931,13 +1090,13 @@ data/processed/features/    data/processed/era5/
               training-ready dataset
 ```
 
-The current implementation therefore completes the dynamic ingestion and automated preprocessing stages while preserving the delayed nature of the ERA5 reference.
+The LK-04 pipeline completes dynamic ingestion and automated preprocessing while preserving the delayed nature of the ERA5 reference. LK-05 also feeds ECMWF raw snapshots into `update_history.py`, creating `data/raw/ecmwf_ifs_history.csv` for DVC versioning. The DVC history dataset is not yet joined to ERA5 or used as a continuously updated training dataset.
 
 ---
 
 ## Project Direction
 
-The repository has progressed from **problem formulation and datasource feasibility** into the first operational implementation of the data pipeline.
+The repository has progressed from **problem formulation and datasource feasibility** to operational ingestion/preprocessing (LK-04), followed by local dataset versioning and a two-version data-growth demonstration with DVC (LK-05).
 
 The following stages have now been implemented:
 
@@ -955,13 +1114,17 @@ idempotent ingestion
 automated preprocessing
         ↓
 basic feature engineering
+        ↓
+aggregated forecast history
+        ↓
+DVC versioning (V1 → V2)
 ```
 
 The next major milestones are:
 
 1. construct forecast-reference pairs using `valid_time`,
 2. build the final training-ready dataset,
-3. establish DVC-based dataset versioning,
+3. configure shared DVC remote storage and reproducible `dvc push`/`dvc pull`,
 4. track model experiments with MLflow,
 5. train and register challenger models,
 6. containerize and serve the champion model,
