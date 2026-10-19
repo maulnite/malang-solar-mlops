@@ -49,3 +49,8 @@ models/*.onnx
 # =========================
 *.log
 logs/
+
+# MLflow local tracking
+mlflow.db*
+mlruns/
+mlartifacts/

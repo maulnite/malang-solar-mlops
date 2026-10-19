@@ -369,7 +369,7 @@ malang-solar-mlops/
 │   └── processed/
 │       ├── features/                    # generated Parquet features
 │       ├── era5/                        # generated clean ERA5
-│       └── training/                    # planned training dataset
+│       └── training/                    # generated LK-06 labeled training dataset
 ├── models/
 ├── notebooks/
 ├── src/
@@ -377,10 +377,15 @@ malang-solar-mlops/
 │   │   ├── ingest_data.py
 │   │   ├── preprocess.py
 │   │   ├── update_history.py
+│   │   ├── build_training_dataset.py
 │   │   ├── test_openmeteo_solar.py
 │   │   └── test_single_run.py
 │   └── model/
-│       └── sanity_baseline.py
+│       ├── sanity_baseline.py
+│       └── train.py
+├── reports/
+│   ├── lk06_best_model.json             # generated metadata for selected candidate
+│   └── lk06_experiment_summary.csv    # generated experiment ranking
 ├── tests/
 ├── .dvcignore
 ├── .gitignore
@@ -412,12 +417,15 @@ The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and 
 | Automated forecast preprocessing | ✅ Completed |
 | Automated ERA5 preprocessing | ✅ Completed |
 | Basic feature engineering | ✅ Completed |
-| Final forecast-reference dataset construction | ⏳ Planned |
+| LK-06 forecast–ERA5 labeled dataset (12 rows) | ✅ Completed (PoC) |
+| Final forecast-reference dataset construction | ⏳ Planned (full-scale) |
 | DVC initialization and local dataset versioning | ✅ Completed |
 | DVC V1 and V2 comparison | ✅ Completed |
 | DVC remote storage | ⏳ Not configured |
-| MLflow experiment tracking | ⏳ Planned |
-| Final model experimentation | ⏳ Planned |
+| MLflow experiment tracking (LK-06) | ✅ Completed (local PoC) |
+| Three Random Forest hyperparameter runs | ✅ Completed (LK-06 PoC) |
+| Model Registry candidate (Version 1) | ✅ Completed (local) |
+| Final model experimentation | ⏳ Planned (larger dataset) |
 | Model serving | ⏳ Planned |
 | CI/CD automation | ⏳ Planned |
 | Drift monitoring | ⏳ Planned |
@@ -1023,6 +1031,122 @@ git show 53b3966:data/raw/ecmwf_ifs_history.csv.dvc
 
 ---
 
+## MLflow Experiment Tracking and Model Registry (LK-06)
+
+### Goal and Relation to the DVC Dataset
+
+LK-06 integrates **MLflow Tracking** and **MLflow Model Registry** into the Malang solar irradiance residual-correction project. The input is the DVC-tracked ECMWF forecast history established in LK-05, enriched with time-aligned ERA5 reference GHI.
+
+The experiment remains a **proof of concept**: the versioned ECMWF history currently includes 12 forecast rows from two model runs, yielding 10 daylight observations (6 train and 4 validation). These are enough to demonstrate reproducible logging, comparison, and model registration, but **not enough to claim generalization or production readiness**.
+
+### Build the Supervised Dataset
+
+From the repository root, retrieve the delayed ERA5 references needed for the two currently versioned forecast dates:
+
+```bash
+python src/data/ingest_data.py --source era5 --date 2026-09-28
+python src/data/ingest_data.py --source era5 --date 2026-10-09
+python src/data/build_training_dataset.py
+```
+
+`build_training_dataset.py` reuses LK-04 preprocessing, merges ECMWF with ERA5 by `valid_time_utc`, and creates:
+
+```text
+data/processed/training/ecmwf_ifs_labeled.parquet
+```
+
+For each matched timestamp, the regression target is:
+
+```text
+residual = actual_ghi - raw_ghi_forecast
+corrected_ghi = max(0, raw_ghi_forecast + predicted_residual)
+```
+
+The 12 current forecast records all matched ERA5, with no missing residual targets. The supervised train/validation split is **temporal by forecast run**, not a random row split, to reduce temporal leakage. Model validation is restricted to daylight observations.
+
+### Train and Track Experiments
+
+The required package is `mlflow` (record the exact installed version in `requirements.txt`). In the `uv` environment, install project dependencies with:
+
+```bash
+uv pip install -r requirements.txt
+```
+
+Run the experiments:
+
+```bash
+python src/model/train.py
+```
+
+The script uses the local SQLite-backed tracking database `sqlite:///mlflow.db` and the experiment name:
+
+```text
+LK06-Malang-Solar-Residual-Correction
+```
+
+It executes three Random Forest residual regressors on the same temporal validation split:
+
+| Run name | `n_estimators` | `max_depth` | `min_samples_leaf` |
+|---|---:|---:|---:|
+| RF-50-depth3 | 50 | 3 | 1 |
+| RF-100-depth6 | 100 | 6 | 1 |
+| RF-200-leaf2 | 200 | None | 2 |
+
+Each successful MLflow run logs hyperparameters, validation metrics (`val_mae`, `val_rmse`, `val_bias`), raw forecast baseline MAE, the percentage MAE improvement, the fitted scikit-learn model, and experiment provenance including the LK-05 DVC forecast content hash. The experiment also records the Git revision when available.
+
+### Observed Results — 19 October 2026
+
+Results below were observed for **6 daylight training rows** and **4 daylight validation rows**, with a raw forecast validation MAE of **73.500 W/m²**.
+
+| Run | Validation MAE (W/m²) | RMSE (W/m²) | Bias (W/m²) | MAE improvement |
+|---|---:|---:|---:|---:|
+| RF-100-depth6 | **69.750** | 86.699 | -1.510 | **+5.102%** |
+| RF-50-depth3 | 70.437 | 87.510 | +0.643 | +4.168% |
+| RF-200-leaf2 | 72.866 | **86.278** | -9.451 | +0.863% |
+
+The selection criterion is **lowest validation MAE**, so `RF-100-depth6` was selected. Although `RF-200-leaf2` produced the lowest RMSE, its MAE was higher. These comparisons illustrate experiment selection behavior only; the dataset is far too small for trustworthy model-performance claims.
+
+### MLflow UI and Model Registry
+
+Start the local UI from the repository root:
+
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+```
+
+Open `http://127.0.0.1:5000` to inspect Training runs, select the three **FINISHED** runs, and compare hyperparameters and validation metrics using the run comparison visualizations. An earlier failed run due to restricted `skops` model types may remain in the run history; exclude it from the three-run comparison.
+
+After the three successful runs, the script registers the best model in MLflow Model Registry:
+
+```text
+Registered model : MalangSolarResidualCorrector
+Version          : 1
+Alias            : lk06-candidate
+Selected run     : RF-100-depth6
+Criterion        : minimum validation MAE
+```
+
+The alias denotes a **candidate for future evaluation**, not a deployed or production champion. Model registry entries and artifacts are retained locally in the MLflow backing store/artifact storage unless a shared tracking server is configured.
+
+The script writes these additional outputs:
+
+```text
+reports/lk06_best_model.json
+reports/lk06_experiment_summary.csv
+```
+
+`lk06_best_model.json` contains the actual source MLflow run ID, registered model/version/alias, model URI, chosen hyperparameters (in the summary CSV), validation metrics, dataset DVC MD5, and Git revision. Do not handcraft run IDs: use the JSON produced by the successful local execution.
+
+### Limitations and Reproducibility
+
+- Only two ECMWF forecast runs have been ingested into the DVC history; only one run is used for training and one for validation.
+- The current MLflow registry is local. No centralized MLflow server or shared artifact backend is configured.
+- The DVC remote is not configured; a fresh Codespace will not automatically receive the history dataset, even if Git has its `.dvc` metadata.
+- The labeled dataset is generated locally and is excluded from ordinary Git tracking.
+- Model training, Model Registry selection, and MLflow UI comparison are implemented for the LK-06 exercise, but automated retraining, champion promotion, and deployment remain future work.
+
+---
+
 ## Data Versioning Policy
 
 Operational raw forecasts, raw ERA5 references, and processed datasets are generated dynamically. They are not committed as ordinary large Git files:
@@ -1054,7 +1178,7 @@ LK-05 adds a separate **DVC-tracked aggregate history**:
 
 ## Current Data Pipeline
 
-The LK-04 ingestion and preprocessing pipeline is:
+The LK-04 operational ingestion and preprocessing pipeline (followed by LK-06 proof-of-concept joining) is:
 
 ```text
                  Dynamic Data Sources
@@ -1081,7 +1205,7 @@ data/processed/features/    data/processed/era5/
           └──────────────┬──────────────┘
                          │
                          ▼
-              Future valid_time join
+              LK-06 PoC valid_time join
                          │
                          ▼
                   residual target
@@ -1090,13 +1214,13 @@ data/processed/features/    data/processed/era5/
               training-ready dataset
 ```
 
-The LK-04 pipeline completes dynamic ingestion and automated preprocessing while preserving the delayed nature of the ERA5 reference. LK-05 also feeds ECMWF raw snapshots into `update_history.py`, creating `data/raw/ecmwf_ifs_history.csv` for DVC versioning. The DVC history dataset is not yet joined to ERA5 or used as a continuously updated training dataset.
+The LK-04 pipeline completes dynamic ingestion and automated preprocessing while preserving the delayed nature of the ERA5 reference. LK-05 also feeds ECMWF raw snapshots into `update_history.py`, creating `data/raw/ecmwf_ifs_history.csv` for DVC versioning. LK-06 now uses the DVC history snapshot, joins it with delayed ERA5, and runs a **small local MLflow proof of concept** for model tracking and registration. This join is not yet a complete production-scale, continuously updated training pipeline.
 
 ---
 
 ## Project Direction
 
-The repository has progressed from **problem formulation and datasource feasibility** to operational ingestion/preprocessing (LK-04), followed by local dataset versioning and a two-version data-growth demonstration with DVC (LK-05).
+The repository has progressed from **problem formulation and datasource feasibility** to operational ingestion/preprocessing (LK-04), followed by local dataset versioning with DVC (LK-05) and a labeled-data / MLflow experiment-tracking proof of concept (LK-06).
 
 The following stages have now been implemented:
 
@@ -1118,22 +1242,27 @@ basic feature engineering
 aggregated forecast history
         ↓
 DVC versioning (V1 → V2)
+        ↓
+ERA5 join and residual label (PoC)
+        ↓
+3 Random Forest MLflow runs
+        ↓
+Model Registry candidate v1
 ```
 
 The next major milestones are:
 
-1. construct forecast-reference pairs using `valid_time`,
-2. build the final training-ready dataset,
-3. configure shared DVC remote storage and reproducible `dvc push`/`dvc pull`,
-4. track model experiments with MLflow,
-5. train and register challenger models,
-6. containerize and serve the champion model,
+1. collect substantially more ECMWF Single Runs history with matching delayed ERA5 labels,
+2. build and DVC-version the final production training dataset,
+3. configure a shared DVC remote for reproducible `dvc push`/`dvc pull`,
+4. move local MLflow tracking and artifacts to an accessible shared backend,
+5. train and validate challengers on a representative temporal holdout,
+6. containerize and serve the accepted champion model,
 7. automate ingestion and evaluation using GitHub Actions,
 8. monitor system and model performance,
 9. detect drift and performance degradation,
-10. automatically retrain challenger models,
-11. validate challengers against the current champion,
-12. deploy improved models through an automated workflow.
+10. automate retraining and benchmark challengers against the champion,
+11. deploy improved models through a controlled workflow.
 
 The long-term objective is a reproducible pipeline capable of:
 

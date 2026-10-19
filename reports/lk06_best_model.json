@@ -1,0 +1,18 @@
+{
+  "registered_model": "MalangSolarResidualCorrector",
+  "registered_version": 1,
+  "registered_alias": "lk06-candidate",
+  "selection_criterion": "lowest temporal validation MAE",
+  "selected_run": "RF-100-depth6",
+  "run_id": "dd660965540c45a286eb238e70411f00",
+  "model_uri": "models:/m-69ebe17f5daf45c19c3752cf1daa1fbb",
+  "best_validation_mae": 69.75,
+  "best_validation_rmse": 86.69904497743904,
+  "best_validation_bias": -1.5100000000000122,
+  "raw_validation_mae": 73.5,
+  "train_rows": 6,
+  "validation_rows": 4,
+  "dvc_forecast_md5": "5ed231ffe84c086adc1ee80957693395",
+  "git_commit": "c510b50",
+  "note": "Selected from LK-06 validation only; do not treat as deployed champion."
+}
