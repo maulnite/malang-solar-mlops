@@ -1,6 +1,6 @@
 # Malang Solar MLOps
 
-> An end-to-end MLOps project for short-term solar irradiance forecast correction in Malang, Indonesia, using dynamic meteorological data, DVC dataset versioning, and continual-learning workflows.
+> An evolving MLOps project for short-term solar irradiance forecast correction in Malang, Indonesia, using ECMWF IFS, ERA5, DVC data versioning, MLflow experiment tracking, model lifecycle management, and local inference verification.
 
 ---
 
@@ -10,7 +10,7 @@
 
 Instead of predicting solar irradiance entirely from scratch, this project applies **machine-learning-based forecast correction**. A numerical weather prediction model first produces a raw solar irradiance forecast, then a machine learning model learns historical forecast errors and estimates a correction that brings the forecast closer to an ERA5 reanalysis reference.
 
-The project is designed not only as a machine learning experiment, but as a production-oriented ML system covering:
+The project is designed as an incrementally developed MLOps system covering:
 
 - dynamic data ingestion,
 - automated data validation and preprocessing,
@@ -219,13 +219,14 @@ Validate the main project dependencies:
 python -c "import numpy, pandas, requests, sklearn, pyarrow; print('Dependencies OK')"
 ```
 
-For LK-05, DVC is also required. Verify it in the active environment:
+DVC and MLflow are also required by the completed local coursework implementations. Verify them in the active environment:
 
 ```bash
 dvc --version
+python -c "import mlflow; print('MLflow:', mlflow.__version__)"
 ```
 
-Install DVC first if the command is unavailable. Its pinned version should also be added to `requirements.txt` so fresh environments can reproduce the tools used for LK-05.
+Both packages are pinned in `requirements.txt`. A fresh environment can install dependencies, but it **cannot recover the local MLflow database/model artifacts or the DVC data cache** solely from the Git repository.
 
 Expected result:
 
@@ -233,7 +234,7 @@ Expected result:
 Dependencies OK
 ```
 
-The project is designed so that the same ingestion and preprocessing pipeline can be executed both locally and inside GitHub Codespaces.
+The same source code can be executed locally or in GitHub Codespaces; data and MLflow artifact restoration across machines requires additional shared storage configuration.
 
 ---
 
@@ -291,7 +292,7 @@ git commit -m "feat: describe the implemented feature"
 git push -u origin feat/example-feature
 ```
 
-A Pull Request is then created from the feature branch into `main`. The LK-05 implementation is developed on `feat/lk05-dvc-versioning`, with separate Git commits for the first and second dataset versions.
+A Pull Request is then created from the feature branch into `main`. The LK-05 implementation used `feat/lk05-dvc-versioning` with separate Git commits for the first and second dataset versions. Later milestones used `feat/lk06-mlflow-tracking` and `feat/lk07-model-lifecycle`.
 
 Changes should be validated before being merged into the stable branch.
 
@@ -311,7 +312,7 @@ Retraining does not automatically replace the production model.
 
 A newly trained **challenger** must first be evaluated against the current **champion** using recent temporally held-out data.
 
-Only a challenger that satisfies the model acceptance criteria will be promoted.
+Only a challenger that satisfies the model acceptance criteria should eventually be promoted in a deployed system. **LK-07 currently simulates registry promotion locally**; it does not implement an automated production gate or real deployment.
 
 ---
 
@@ -382,10 +383,13 @@ malang-solar-mlops/
 │   │   └── test_single_run.py
 │   └── model/
 │       ├── sanity_baseline.py
-│       └── train.py
+│       ├── train.py                     # LK-06 tracking and V1 registration
+│       └── lk07_registry.py             # LK-07 versioning and inference smoke test
 ├── reports/
-│   ├── lk06_best_model.json             # generated metadata for selected candidate
-│   └── lk06_experiment_summary.csv    # generated experiment ranking
+│   ├── lk06_best_model.json             # V1 registry and source provenance
+│   ├── lk06_experiment_summary.csv      # LK-06 model ranking
+│   ├── lk07_model_registry.yaml         # V1/V2 lineage + active model alias
+│   └── lk07_inference_result.json       # local smoke-test evidence
 ├── tests/
 ├── .dvcignore
 ├── .gitignore
@@ -425,6 +429,12 @@ The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and 
 | MLflow experiment tracking (LK-06) | ✅ Completed (local PoC) |
 | Three Random Forest hyperparameter runs | ✅ Completed (LK-06 PoC) |
 | Model Registry candidate (Version 1) | ✅ Completed (local) |
+| LK-07 challenger registration (Version 2) | ✅ Completed (local) |
+| LK-07 V1/V2 selection using temporal validation MAE | ✅ Completed (PoC) |
+| LK-07 Staging → Production lifecycle simulation | ✅ Completed (local) |
+| LK-07 `@production` model loading and inference smoke test | ✅ PASS (local) |
+| LK-07 DVC–MLflow lineage manifest | ✅ Completed |
+| Actual production service deployment | ⏳ Not implemented |
 | Final model experimentation | ⏳ Planned (larger dataset) |
 | Model serving | ⏳ Planned |
 | CI/CD automation | ⏳ Planned |
@@ -837,21 +847,17 @@ A future stage will join forecast observations with their corresponding ERA5 ref
 
 ---
 
-### Future Forecast-Reference Join
+### Forecast-Reference Join (LK-06 Proof of Concept)
 
-The future labelled training dataset will join processed forecasts and ERA5 references by:
+The LK-06 implementation **already joins** DVC-tracked ECMWF forecast history with the delayed ERA5 reference using `valid_time_utc`:
 
-```text
-valid_time
+```bash
+python src/data/build_training_dataset.py
 ```
 
-After the join, the training target will be calculated as:
+The generated dataset is `data/processed/training/ecmwf_ifs_labeled.parquet` and contains `actual_ghi` and the target `residual = actual_ghi - raw_ghi_forecast`. For the current two-run history, all 12 forecasts match ERA5, with 10 daylight observations available for modeling.
 
-```text
-residual = ERA5 GHI - raw forecast GHI
-```
-
-This dataset will later become the versioned training snapshot used for final model experimentation.
+This is a **small local proof of concept**. The larger, continuously updated, DVC-versioned training snapshot remains a future goal.
 
 ---
 
@@ -1026,7 +1032,7 @@ git show 53b3966:data/raw/ecmwf_ifs_history.csv.dvc
 - Git tracks the DVC pointer file, DVC configuration, source code, and documentation.
 - DVC stores CSV contents in its **local cache**, not in the Git repository.
 - **No DVC remote is configured yet.** A fresh clone or Codespace cannot restore these dataset versions automatically from GitHub alone. A shared object-storage remote (for example, S3, MinIO, or another DVC-supported backend) and `dvc push`/`dvc pull` would be needed for that workflow.
-- GitHub Actions / cron scheduling, automated `dvc add`, reference joins, MLflow tracking, and continuous retraining are not implemented yet.
+- GitHub Actions scheduling, automated `dvc add`, a full-scale rolling reference join, and continuous retraining are not implemented yet. A small labeled reference join and MLflow experiment tracking have been demonstrated in LK-06 and local model lifecycle management in LK-07.
 - LK-05 demonstrates an append-only historical dataset and two different tracked versions; it does not yet constitute a complete continually trained production model.
 
 ---
@@ -1135,7 +1141,7 @@ reports/lk06_best_model.json
 reports/lk06_experiment_summary.csv
 ```
 
-`lk06_best_model.json` contains the actual source MLflow run ID, registered model/version/alias, model URI, chosen hyperparameters (in the summary CSV), validation metrics, dataset DVC MD5, and Git revision. Do not handcraft run IDs: use the JSON produced by the successful local execution.
+`lk06_best_model.json` contains the source MLflow run ID, registered model/version/alias, model URI, validation metrics, dataset DVC MD5, and Git revision. Hyperparameters appear in the summary CSV and MLflow run. Do not handcraft run IDs: use metadata produced by the actual local execution.
 
 ### Limitations and Reproducibility
 
@@ -1143,7 +1149,191 @@ reports/lk06_experiment_summary.csv
 - The current MLflow registry is local. No centralized MLflow server or shared artifact backend is configured.
 - The DVC remote is not configured; a fresh Codespace will not automatically receive the history dataset, even if Git has its `.dvc` metadata.
 - The labeled dataset is generated locally and is excluded from ordinary Git tracking.
-- Model training, Model Registry selection, and MLflow UI comparison are implemented for the LK-06 exercise, but automated retraining, champion promotion, and deployment remain future work.
+- MLflow Tracking and selection are demonstrated in LK-06. LK-07 subsequently demonstrates a **manual local** staging/production alias transition and programmatic model loading; automated retraining and real service deployment are not implemented.
+
+---
+
+## MLflow Model Registry, Model Versioning, and Inference Readiness (LK-07)
+
+### Goal and Scope
+
+LK-07 extends the LK-06 model artifact into a controlled local model lifecycle. It registers a second version, compares both versions, demonstrates the legacy `None → Staging → Production` progression requested in the coursework, tracks DVC lineage in a lightweight YAML manifest, and loads the version selected for the **local Production simulation** for an inference smoke test.
+
+**Scope warning:** `Production` below is a registry label/alias on a local MLflow instance. There is no deployed inference service, real-time monitoring, or production-validated model. With six training and four validation samples, this remains an educational proof of concept.
+
+### Model Registry Versions and Selection
+
+Both versions use the same feature columns, DVC forecast dataset version, and forecast-run-based temporal split. The target is the ERA5–ECMWF residual, and the selection criterion is **minimum daylight validation MAE**.
+
+| Property | Version 1 (LK-06) | Version 2 (LK-07) |
+|---|---:|---:|
+| Model | Random Forest | Random Forest |
+| `n_estimators` | 100 | 150 |
+| `max_depth` | 6 | 5 |
+| `min_samples_leaf` | 1 | 1 |
+| `random_state` | 42 | 42 |
+| Validation MAE (W/m²) ↓ | **69.750** | 70.820 |
+| Validation RMSE (W/m²) ↓ | **86.699** | 86.988 |
+| Validation bias (W/m²) | −1.510 | −3.873 |
+| Legacy model stage (final) | **Production** | None |
+| Registry role | Selected for local Production simulation | Challenger |
+
+Version 1 is selected because its MAE is **1.070 W/m² lower** than Version 2 on the same four-row validation set. The result is a decision for the coursework simulation, **not** evidence of reliable out-of-sample superiority.
+
+Registry details:
+
+```text
+Registered model : MalangSolarResidualCorrector
+Version 1 run ID : dd660965540c45a286eb238e70411f00
+Version 2 run ID : 6aa9e20405df4dd7b21eabf3f09c193b
+Selected version : 1
+Active model URI : models:/MalangSolarResidualCorrector@production
+Challenger alias : lk07-challenger → Version 2
+Dataset DVC MD5 : 5ed231ffe84c086adc1ee80957693395
+```
+
+The `@production` alias resolves to **Version 1** and is the source of truth for the local inference smoke test. The `@staging` alias also points to Version 1 from the preceding transition. `@lk06-candidate` (V1) and `@lk07-challenger` (V2) are also visible in MLflow UI. Aliases and legacy stages are distinct concepts.
+
+### Prerequisites and Local Tracking
+
+Execute commands **from the repository root**, using the same machine and Python environment that still hold the LK-06 SQLite database, its MLflow artifact store, the LK-05 DVC data, and the locally generated labeled training dataset:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -c "import mlflow; print(mlflow.__version__)"
+dvc status
+Test-Path mlflow.db
+Test-Path reports/lk06_best_model.json
+Test-Path data/processed/training/ecmwf_ifs_labeled.parquet
+```
+
+The LK-07 script refuses to proceed without the LK-06 registry Version 1 and checks that the DVC forecast hash still matches the earlier model provenance. **Do not rerun `dvc init` or retrain LK-06 just to perform LK-07.**
+
+Local MLflow UI:
+
+```powershell
+mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+```
+
+Open `http://127.0.0.1:5000` and navigate to **Model Registry → MalangSolarResidualCorrector**. Note that the SQLite URI is a local path, not a shared public tracking server.
+
+### Register Version 2
+
+Inspect the registry before registration:
+
+```powershell
+python src/model/lk07_registry.py status
+```
+
+Train the challenger and create Version 2:
+
+```powershell
+python src/model/lk07_registry.py register-v2
+```
+
+This command trains a Random Forest with 150 trees, max depth 5, and min leaf size 1; logs its metrics and artifact in MLflow experiment `LK07-Malang-Solar-Model-Lifecycle`; registers Version 2 in `MalangSolarResidualCorrector`; and sets the alias `lk07-challenger`. It also writes `reports/lk07_model_registry.yaml`.
+
+**Do not rerun `register-v2` once Version 2 exists.** The script prevents silently generating another model version.
+
+Check both versions:
+
+```powershell
+python src/model/lk07_registry.py status
+```
+
+### Local Staging and Production Transition
+
+To reproduce the recorded lifecycle simulation with the selected Version 1:
+
+```powershell
+python src/model/lk07_registry.py stage --version 1
+python src/model/lk07_registry.py production --version 1
+python src/model/lk07_registry.py status
+```
+
+The initial Version 1 stage was `None`. The Staging command records the Staging transition and sets `@staging` to V1. The Production command then records the Production transition and sets `@production` (and `@champion`) to V1.
+
+MLflow legacy model-version stages are deprecated. For compatibility with the coursework, the script tries a legacy stage transition but uses the **modern alias `production`** to resolve the model during inference. Running the Staging command again *after* Production can change the legacy stage back to Staging; finish the sequence with the Production command.
+
+The registry version's `aliases` list in some local SDK metadata responses was displayed as `[]`, even though aliases were visible in MLflow UI and could be resolved successfully. Verify the active version using the explicit `Staging alias` / `Production alias` values printed by the script and the successful alias-based model load, rather than interpreting the list `aliases: []` in the manifest as absence of an alias.
+
+### Programmatic Inference Smoke Test
+
+After the Production alias points to the intended version, execute:
+
+```powershell
+python src/model/lk07_registry.py infer
+```
+
+The script loads the saved artifact with MLflow's PyFunc interface:
+
+```python
+model = mlflow.pyfunc.load_model(
+    "models:/MalangSolarResidualCorrector@production"
+)
+```
+
+It uses one feature row from the existing local validation data and computes:
+
+```text
+corrected_ghi = max(0, raw_forecast_ghi + predicted_residual)
+```
+
+Observed local LK-07 smoke-test output:
+
+| Field | Value |
+|---|---:|
+| Registry alias resolved | `@production` → V1 |
+| Forecast valid time (UTC) | `2026-10-09 07:00:00+00:00` |
+| Raw forecast GHI | 662.0 W/m² |
+| Predicted residual | −52.2 W/m² |
+| Corrected forecast GHI | **609.8 W/m²** |
+| ERA5 reference (offline check only) | 474.0 W/m² |
+| Result | **`INFERENCE SMOKE TEST: PASS`** |
+
+The smoke test verifies that a registered model artifact can be **resolved, loaded, and used to compute a finite prediction** with the expected features. It does not establish general model quality or a deployed inference endpoint. ERA5 is included only as a delayed/offline reference and is **not** required to execute forecast-time inference.
+
+The generated evidence file is:
+
+```text
+reports/lk07_inference_result.json
+```
+
+### DVC–MLflow Metadata and Data Lineage
+
+The registry manifest is stored at:
+
+```text
+reports/lk07_model_registry.yaml
+```
+
+It records:
+
+- the model name and local MLflow backend URI;
+- the LK-05 DVC pointer `data/raw/ecmwf_ifs_history.csv.dvc` and MD5 `5ed231ffe84c086adc1ee80957693395`;
+- the local labeled dataset path;
+- Version 1 and Version 2, their run IDs and registered model URIs;
+- validation MAE/RMSE and hyperparameters;
+- the training Git revisions (`c510b50` for V1, `791e6c4` for V2);
+- the active `staging_version` and `production_version` (both V1 in the recorded run);
+- `local_simulation_only: true`.
+
+This metadata connects the **versioned forecast source** to the **specific training runs** and selected model version. It does not copy model weights into Git, version the labeled training Parquet itself with DVC, or make local MLflow artifacts remotely accessible.
+
+### Versioning, Reproducibility, and Remaining Work
+
+Git should track:
+
+```text
+src/model/lk07_registry.py
+reports/lk07_model_registry.yaml
+reports/lk07_inference_result.json
+README.md
+```
+
+Git intentionally ignores `mlflow.db*`, `mlruns/`, `mlartifacts/`, the local Python virtual environment, DVC cache, and generated feature/training files. Model binary artifacts are still owned by the **local MLflow artifact store**.
+
+LK-07 establishes **manual local model lifecycle management and inference readiness at the artifact level**, but not online serving or safe automated release promotion. Future work includes significantly expanding the training data, proper temporal validation, versioning labeled datasets in DVC, shared MLflow tracking/artifact storage, API/container serving, monitoring, and controlled deployment gates.
 
 ---
 
@@ -1171,6 +1361,10 @@ LK-05 adds a separate **DVC-tracked aggregate history**:
 | `data/raw/ecmwf_ifs_history.csv` | DVC local cache | Aggregated forecast history |
 | `data/raw/ecmwf_ifs_history.csv.dvc` | Git | Hash-based pointer to DVC data |
 | `data/processed/**/*.parquet` | Local generated storage | Clean, feature-ready outputs |
+| `reports/lk06_*.json`, `reports/lk06_*.csv` | Git | Experiment selection and provenance |
+| `reports/lk07_model_registry.yaml` | Git | Model V1/V2 lineage and active alias metadata |
+| `reports/lk07_inference_result.json` | Git | Reproducible evidence of local smoke test |
+| `mlflow.db*`, `mlruns/`, `mlartifacts/` | Local MLflow storage (Git-ignored) | Tracking/registry DB and model artifacts |
 
 **Git commits do not upload the historical CSV data itself.** DVC remote storage is a separate, optional future enhancement for sharing complete historical datasets across machines and Codespaces.
 
@@ -1178,7 +1372,7 @@ LK-05 adds a separate **DVC-tracked aggregate history**:
 
 ## Current Data Pipeline
 
-The LK-04 operational ingestion and preprocessing pipeline (followed by LK-06 proof-of-concept joining) is:
+The LK-04 ingestion/preprocessing pipeline, LK-05 DVC history, and LK-06/LK-07 local learning/model lifecycle demonstrations connect as follows:
 
 ```text
                  Dynamic Data Sources
@@ -1214,13 +1408,13 @@ data/processed/features/    data/processed/era5/
               training-ready dataset
 ```
 
-The LK-04 pipeline completes dynamic ingestion and automated preprocessing while preserving the delayed nature of the ERA5 reference. LK-05 also feeds ECMWF raw snapshots into `update_history.py`, creating `data/raw/ecmwf_ifs_history.csv` for DVC versioning. LK-06 now uses the DVC history snapshot, joins it with delayed ERA5, and runs a **small local MLflow proof of concept** for model tracking and registration. This join is not yet a complete production-scale, continuously updated training pipeline.
+The LK-04 pipeline completes dynamic ingestion and automated preprocessing while preserving the delayed nature of the ERA5 reference. LK-05 also feeds ECMWF raw snapshots into `update_history.py`, creating `data/raw/ecmwf_ifs_history.csv` for DVC versioning. LK-06 now uses the DVC history snapshot, joins it with delayed ERA5, and runs a **small local MLflow proof of concept** for model tracking and registration. This join is not yet a complete production-scale, continuously updated training pipeline. LK-07 adds the Version 2 challenger, simulated Staging/Production promotion of V1 through MLflow, and a local `@production` inference smoke test.
 
 ---
 
 ## Project Direction
 
-The repository has progressed from **problem formulation and datasource feasibility** to operational ingestion/preprocessing (LK-04), followed by local dataset versioning with DVC (LK-05) and a labeled-data / MLflow experiment-tracking proof of concept (LK-06).
+The repository has progressed from **problem formulation and datasource feasibility** to ingestion/preprocessing (LK-04), local dataset versioning (LK-05), MLflow experiment tracking and candidate registration (LK-06), and a manually controlled registry/inference simulation (LK-07).
 
 The following stages have now been implemented:
 
@@ -1248,6 +1442,14 @@ ERA5 join and residual label (PoC)
 3 Random Forest MLflow runs
         ↓
 Model Registry candidate v1
+        ↓
+Version 2 challenger in same Registry
+        ↓
+V1/V2 comparison (validation MAE)
+        ↓
+V1 Staging → local Production alias
+        ↓
+model loading + inference smoke test PASS
 ```
 
 The next major milestones are:
@@ -1256,8 +1458,8 @@ The next major milestones are:
 2. build and DVC-version the final production training dataset,
 3. configure a shared DVC remote for reproducible `dvc push`/`dvc pull`,
 4. move local MLflow tracking and artifacts to an accessible shared backend,
-5. train and validate challengers on a representative temporal holdout,
-6. containerize and serve the accepted champion model,
+5. train and validate future challengers on a representative temporal holdout,
+6. containerize and serve a properly evaluated accepted champion model,
 7. automate ingestion and evaluation using GitHub Actions,
 8. monitor system and model performance,
 9. detect drift and performance degradation,

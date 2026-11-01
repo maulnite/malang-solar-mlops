@@ -1,0 +1,42 @@
+# LK-07: Git-track this YAML; actual artifacts are stored in local MLflow.
+updated_at_utc: "2026-11-01T15:09:41.902943+00:00"
+model_name: "MalangSolarResidualCorrector"
+tracking_uri: "sqlite:///mlflow.db"
+dataset:
+  dvc_pointer: "data/raw/ecmwf_ifs_history.csv.dvc"
+  dvc_md5: "5ed231ffe84c086adc1ee80957693395"
+  labeled_dataset: "data/processed/training/ecmwf_ifs_labeled.parquet"
+lifecycle:
+  staging_version: 1
+  production_version: 1
+  production_uri: "models:/MalangSolarResidualCorrector@production"
+  local_simulation_only: true
+versions:
+  - version: 1
+    run_id: "dd660965540c45a286eb238e70411f00"
+    stage: "Production"
+    aliases: []
+    validation_mae: 69.75
+    validation_rmse: 86.69904497743904
+    source_dvc_md5: "5ed231ffe84c086adc1ee80957693395"
+    training_git_commit: "c510b50"
+    model_uri: "models:/MalangSolarResidualCorrector/1"
+    parameters:
+      max_depth: "6"
+      min_samples_leaf: "1"
+      n_estimators: "100"
+      random_state: "42"
+  - version: 2
+    run_id: "6aa9e20405df4dd7b21eabf3f09c193b"
+    stage: "None"
+    aliases: []
+    validation_mae: 70.82000000000001
+    validation_rmse: 86.98842898787044
+    source_dvc_md5: "5ed231ffe84c086adc1ee80957693395"
+    training_git_commit: "791e6c4"
+    model_uri: "models:/MalangSolarResidualCorrector/2"
+    parameters:
+      max_depth: "5"
+      min_samples_leaf: "1"
+      n_estimators: "150"
+      random_state: "42"
