@@ -1,0 +1,14 @@
+{
+  "tested_at_utc": "2026-11-01T15:11:04.953353+00:00",
+  "registered_model": "MalangSolarResidualCorrector",
+  "production_alias_version": 1,
+  "model_uri": "models:/MalangSolarResidualCorrector@production",
+  "forecast_valid_time_utc": "2026-10-09 07:00:00+00:00",
+  "raw_forecast_ghi_w_m2": 662.0,
+  "predicted_residual_w_m2": -52.2,
+  "corrected_forecast_ghi_w_m2": 609.8,
+  "era5_reference_w_m2_for_offline_check_only": 474.0,
+  "dvc_forecast_md5": "5ed231ffe84c086adc1ee80957693395",
+  "status": "PASS",
+  "note": "Single local smoke test, not service deployment"
+}
