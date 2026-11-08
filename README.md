@@ -434,10 +434,12 @@ The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and 
 | LK-07 Staging → Production lifecycle simulation | ✅ Completed (local) |
 | LK-07 `@production` model loading and inference smoke test | ✅ PASS (local) |
 | LK-07 DVC–MLflow lineage manifest | ✅ Completed |
+| LK-08 local code-triggered pipeline (tests, training, evaluation, staging) | ✅ PASS (local demonstration) |
+| LK-08 GitHub Actions automated execution | ⏳ Pending PR/merge verification |
 | Actual production service deployment | ⏳ Not implemented |
 | Final model experimentation | ⏳ Planned (larger dataset) |
 | Model serving | ⏳ Planned |
-| CI/CD automation | ⏳ Planned |
+| Code-triggered CI and automated retraining (LK-08) | ✅ Workflow configured; hosted execution pending |
 | Drift monitoring | ⏳ Planned |
 | Prometheus & Grafana monitoring | ⏳ Planned |
 | Automated continuous training | ⏳ Planned |
@@ -1337,6 +1339,79 @@ LK-07 establishes **manual local model lifecycle management and inference readin
 
 ---
 
+## Code-Triggered End-to-End MLOps Pipeline (LK-08)
+
+### Goal and Scope
+
+LK-08 connects the existing LK-04–LK-07 components into a **code-triggered** training and evaluation workflow. GitHub Actions tests pull requests targeting `main` and runs the end-to-end training pipeline after a push to `main` (including a PR merge). A manual `workflow_dispatch` trigger is also available on `main`.
+
+This is a **coursework demonstration of Code as a Trigger**, not a production deployment or an implementation of continuous ingestion and drift-triggered retraining.
+
+### Pipeline and Reproducible Input
+
+```text
+Pull request to main -> pytest
+Push/merge to main -> pytest -> bootstrap DVC V2 historical fixture
+                   -> ECMWF/ERA5 preprocessing and target join
+                   -> three MLflow Random Forest training runs
+                   -> evaluation gate -> conditional MLflow @staging registration
+                   -> GitHub Actions evidence artifacts
+```
+
+- Workflow: `.github/workflows/mlops-automation.yml`.
+- Forecast fixture: `data/fixtures/lk08_ecmwf_history_v2.csv` (12 records, two forecast runs).
+- ERA5 fixtures: `data/fixtures/lk08_era5/era5_20260928.csv` and `era5_20261009.csv`.
+- Forecast fixture must match the LK-05 DVC V2 pointer: MD5 `5ed231ffe84c086adc1ee80957693395`.
+- `src/data/lk08_prepare.py` verifies the snapshot, reconstructs the generated files under `data/raw/`, and reuses LK-04 preprocessing and the LK-06 supervised dataset builder. Result: 12 labeled records (10 daylight).
+
+The fixture is a small, **static historical snapshot committed to Git** for clean-runner reproducibility. It is not a live data pull and is not a replacement for a DVC remote. The original `data/raw/ecmwf_ifs_history.csv` remains tracked through DVC metadata, not ordinary Git.
+
+### Training, Quality Gate, and Model Registry
+
+- `src/model/train.py --no-register --output-dir reports/lk08` runs the original three LK-06 Random Forest configurations but **defers model registration**.
+- `src/model/lk08_evaluate.py --min-improvement 5 --max-abs-bias 20` checks a provisional demonstration gate: relative MAE improvement >= 5%, corrected RMSE lower than raw RMSE, and absolute corrected bias <= 20 W/m².
+- Only a passing evaluation can proceed to `src/model/lk08_register.py`, which registers the candidate and sets the `@staging` alias. The LK-07 `@production` model is not changed.
+- The original **LK-01 project success target remains >= 10% MAE improvement**. Passing the 5% LK-08 demonstration gate does not mean that the project-level target has been achieved.
+
+Local verification on 8 November 2026:
+
+| Check | Result |
+|---|---|
+| Unit tests | 7 passed |
+| Labeled data | 12 records; 6 daylight training / 4 daylight validation |
+| Raw forecast validation MAE | 73.500 W/m² |
+| Selected RF-100-depth6 validation MAE | 69.750 W/m² |
+| Selected validation RMSE / bias | 86.699 W/m² / -1.510 W/m² |
+| Relative MAE improvement | 5.102% |
+| Provisional LK-08 gate | PASS (local) |
+| Model registration and `@staging` loading | PASS (local) |
+| GitHub Actions end-to-end run | **Pending verification after PR merge** |
+
+This dataset is too small for a generalization claim. The figures are evidence for workflow integration, **not production model performance**.
+
+### Reproduce Locally (PowerShell)
+
+Use an activated Python 3.11 environment from the repository root. The project uses `uv` to install into `.venv` locally; the hosted GitHub runner uses `pip`.
+
+```powershell
+uv pip install -r requirements.txt -r requirements-lk08.txt
+python -m pytest -q tests/
+
+$env:MLFLOW_TRACKING_URI = "sqlite:///lk08-mlflow.db"
+$env:MLFLOW_EXPERIMENT_NAME = "LK08-Malang-Solar-CI"
+$env:MLOPS_REGISTERED_MODEL_NAME = "MalangSolarResidualCorrectorLK08"
+
+python src/data/lk08_prepare.py
+python src/model/train.py --no-register --output-dir reports/lk08
+python src/model/lk08_evaluate.py --min-improvement 5 --max-abs-bias 20
+# Run only if the evaluation gate passed:
+python src/model/lk08_register.py
+```
+
+The generated local files `lk08-mlflow.db*`, `reports/lk08/`, and MLflow artifact directories are ignored by Git. The hosted runner uses a fresh temporary SQLite tracking backend and uploads available evidence with `actions/upload-artifact`; **it is not a persistent, shared MLflow Registry**. Long-term work requires shared tracking/artifact storage, a DVC remote, fuller historical data, and label/drift-aware continuous training.
+
+---
+
 ## Data Versioning Policy
 
 Operational raw forecasts, raw ERA5 references, and processed datasets are generated dynamically. They are not committed as ordinary large Git files:
@@ -1357,6 +1432,7 @@ LK-05 adds a separate **DVC-tracked aggregate history**:
 |---|---|---|
 | `src/data/*.py` | Git | Data pipeline source code |
 | `data/raw/sample/ecmwf_ifs_sample.csv` | Git | Small LK-04 evidence file |
+| `data/fixtures/lk08_*` | Git (snapshot only) | Verified historic LK-08 clean-runner bootstrap fixtures |
 | `data/raw/forecast/*.csv` | Local generated storage | Per-run raw snapshots |
 | `data/raw/ecmwf_ifs_history.csv` | DVC local cache | Aggregated forecast history |
 | `data/raw/ecmwf_ifs_history.csv.dvc` | Git | Hash-based pointer to DVC data |
@@ -1414,7 +1490,7 @@ The LK-04 pipeline completes dynamic ingestion and automated preprocessing while
 
 ## Project Direction
 
-The repository has progressed from **problem formulation and datasource feasibility** to ingestion/preprocessing (LK-04), local dataset versioning (LK-05), MLflow experiment tracking and candidate registration (LK-06), and a manually controlled registry/inference simulation (LK-07).
+The repository has progressed from **problem formulation and datasource feasibility** to ingestion/preprocessing (LK-04), local dataset versioning (LK-05), MLflow experiment tracking and candidate registration (LK-06), and a manually controlled registry/inference simulation (LK-07). LK-08 adds a GitHub Actions code-triggered pipeline with locally verified test, training, evaluation, and staging steps; the hosted workflow must still be verified after merging the PR.
 
 The following stages have now been implemented:
 
@@ -1450,6 +1526,12 @@ V1/V2 comparison (validation MAE)
 V1 Staging → local Production alias
         ↓
 model loading + inference smoke test PASS
+        ↓
+LK08 code-triggered workflow configured
+        ↓
+7 pytest tests PASS (local)
+        ↓
+RF retraining → quality gate → @staging PASS (local)
 ```
 
 The next major milestones are:
@@ -1460,7 +1542,7 @@ The next major milestones are:
 4. move local MLflow tracking and artifacts to an accessible shared backend,
 5. train and validate future challengers on a representative temporal holdout,
 6. containerize and serve a properly evaluated accepted champion model,
-7. automate ingestion and evaluation using GitHub Actions,
+7. extend GitHub Actions from static-fixture, code-triggered training to scheduled data ingestion, delayed-label refresh, and drift-triggered retraining,
 8. monitor system and model performance,
 9. detect drift and performance degradation,
 10. automate retraining and benchmark challengers against the champion,

@@ -1,0 +1,75 @@
+name: LK08 - MLOps Code Trigger Automation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lk08-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  automated-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-lk08.txt
+      - name: Automated pytest
+        run: python -m pytest -q tests/
+
+  train-evaluate-register:
+    name: Bootstrap DVC V2 -> Retrain -> Evaluate -> Staging
+    needs: automated-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MLFLOW_TRACKING_URI: sqlite:///lk08-mlflow.db
+      MLFLOW_EXPERIMENT_NAME: LK08-Malang-Solar-CI
+      MLOPS_REGISTERED_MODEL_NAME: MalangSolarResidualCorrectorLK08
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-lk08.txt
+      - name: Bootstrap historic DVC V2 dataset and delayed ERA5 labels
+        run: python src/data/lk08_prepare.py
+      - name: Automated retraining from LK06 train.py (registration deferred)
+        run: python src/model/train.py --no-register --output-dir reports/lk08
+      - name: Compare metrics with evaluation gate
+        run: python src/model/lk08_evaluate.py --min-improvement 5 --max-abs-bias 20
+      - name: Register passing model to MLflow Staging
+        run: python src/model/lk08_register.py
+      - name: Upload evidence even if a step fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lk08-evidence-${{ github.run_number }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            reports/lk08/
+            lk08-mlflow.db
+            mlruns/
+            mlartifacts/

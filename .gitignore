@@ -53,4 +53,6 @@ logs/
 # MLflow local tracking
 mlflow.db*
 mlruns/
-mlartifacts/
+mlartifacts/# LK08 isolated local CI artifacts
+lk08-mlflow.db*
+reports/lk08/
