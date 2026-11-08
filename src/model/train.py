@@ -6,7 +6,9 @@ Run from repository root:
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import subprocess
 from math import ceil, sqrt
@@ -24,9 +26,9 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 DATA_PATH = Path('data/processed/training/ecmwf_ifs_labeled.parquet')
 DVC_META_PATH = Path('data/raw/ecmwf_ifs_history.csv.dvc')
 OUTPUT_DIR = Path('reports')
-TRACKING_URI = 'sqlite:///mlflow.db'
-EXPERIMENT_NAME = 'LK06-Malang-Solar-Residual-Correction'
-REGISTERED_MODEL_NAME = 'MalangSolarResidualCorrector'
+TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'sqlite:///mlflow.db')
+EXPERIMENT_NAME = os.getenv('MLFLOW_EXPERIMENT_NAME', 'LK06-Malang-Solar-Residual-Correction')
+REGISTERED_MODEL_NAME = os.getenv('MLOPS_REGISTERED_MODEL_NAME', 'MalangSolarResidualCorrector')
 RANDOM_STATE = 42
 
 FEATURE_COLUMNS = [
@@ -95,6 +97,11 @@ def load_and_split() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-register', action='store_true', help='CI: register only after independent evaluation gate')
+    parser.add_argument('--output-dir', type=Path, default=None)
+    args = parser.parse_args()
+    output_dir = args.output_dir or OUTPUT_DIR
     train, valid = load_and_split()
     X_train = train[FEATURE_COLUMNS].astype(float)
     y_train = train['residual'].astype(float)
@@ -105,6 +112,7 @@ def main() -> None:
     baseline_mae = float(mean_absolute_error(actual, raw))
     source_tags = provenance()
     mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_registry_uri(TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     print('=== LK-06 MLFLOW EXPERIMENTS ===')
@@ -128,7 +136,7 @@ def main() -> None:
                 'task': 'ghi_residual_regression',
                 'source_dataset': 'LK05 DVC ECMWF history + ERA5',
                 'evaluation': 'temporal_validation_by_forecast_run',
-                'scope': 'LK06 demonstration (not production benchmark)',
+                'scope': ('LK08 CI demo, frozen DVC v2 dataset, not production benchmark' if args.no_register else 'LK06 demonstration (not production benchmark)'),
             })
             model.fit(X_train, y_train)
             residual_prediction = model.predict(X_valid)
@@ -169,21 +177,27 @@ def main() -> None:
 
     ranking = pd.DataFrame(rows).sort_values('val_mae').reset_index(drop=True)
     best = ranking.iloc[0].to_dict()
-    registered = mlflow.register_model(
-        model_uri=best['model_uri'],
-        name=REGISTERED_MODEL_NAME,
-        await_registration_for=30,
-    )
-    MlflowClient().set_registered_model_alias(
-        REGISTERED_MODEL_NAME, 'lk06-candidate', registered.version
-    )
+    registered_version = None
+    registered_alias = None
+    if not args.no_register:
+        registered = mlflow.register_model(
+            model_uri=best['model_uri'],
+            name=REGISTERED_MODEL_NAME,
+            await_registration_for=30,
+        )
+        MlflowClient().set_registered_model_alias(
+            REGISTERED_MODEL_NAME, 'lk06-candidate', registered.version
+        )
+        registered_version = registered.version
+        registered_alias = 'lk06-candidate'
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    ranking.to_csv(OUTPUT_DIR / 'lk06_experiment_summary.csv', index=False)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_file = output_dir / ('experiment_summary.csv' if args.no_register else 'lk06_experiment_summary.csv')
+    ranking.to_csv(summary_file, index=False)
     metadata = {
         'registered_model': REGISTERED_MODEL_NAME,
-        'registered_version': registered.version,
-        'registered_alias': 'lk06-candidate',
+        'registered_version': registered_version,
+        'registered_alias': registered_alias,
         'selection_criterion': 'lowest temporal validation MAE',
         'selected_run': best['run_name'],
         'run_id': best['run_id'],
@@ -198,13 +212,17 @@ def main() -> None:
         'git_commit': source_tags['git_commit'],
         'note': 'Selected from LK-06 validation only; do not treat as deployed champion.',
     }
-    (OUTPUT_DIR / 'lk06_best_model.json').write_text(
+    metadata_file = output_dir / ('best_model.json' if args.no_register else 'lk06_best_model.json')
+    metadata_file.write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding='utf-8'
     )
     print('\n=== EXPERIMENT RANKING ===')
     print(ranking[['run_name', 'val_mae', 'val_rmse', 'val_bias', 'improvement_percent']].to_string(index=False))
-    print(f'\nRegistered candidate: {REGISTERED_MODEL_NAME} v{registered.version}')
-    print('Metadata saved: reports/lk06_best_model.json')
+    if args.no_register:
+        print('CI training complete: registration deferred to LK08 evaluation gate.')
+    else:
+        print(f'\nRegistered candidate: {REGISTERED_MODEL_NAME} v{registered_version}')
+    print(f'Metadata saved: {metadata_file}')
     print('Start MLflow UI: mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000')
 
 
