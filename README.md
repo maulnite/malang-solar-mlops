@@ -354,48 +354,33 @@ The repository currently follows the modular structure below. Directories holdin
 ```text
 malang-solar-mlops/
 ├── .devcontainer/
-│   └── devcontainer.json
 ├── .dvc/
-│   ├── .gitignore
-│   └── config
+├── .github/workflows/mlops-automation.yml # LK-08 CI
 ├── config/
 ├── data/
-│   ├── raw/
-│   │   ├── forecast/                    # generated ECMWF run snapshots
-│   │   ├── era5/                        # generated ERA5 snapshots
-│   │   ├── sample/
-│   │   │   └── ecmwf_ifs_sample.csv      # small Git-tracked LK-04 sample
-│   │   ├── ecmwf_ifs_history.csv        # DVC-tracked local dataset
-│   │   └── ecmwf_ifs_history.csv.dvc    # Git-tracked DVC pointer
-│   └── processed/
-│       ├── features/                    # generated Parquet features
-│       ├── era5/                        # generated clean ERA5
-│       └── training/                    # generated LK-06 labeled training dataset
+│   ├── fixtures/                        # LK-08 immutable historical snapshots
+│   ├── raw/                             # operational snapshots + DVC pointer
+│   └── processed/                       # generated Parquet (Git-ignored)
 ├── models/
 ├── notebooks/
 ├── src/
-│   ├── data/
-│   │   ├── ingest_data.py
-│   │   ├── preprocess.py
-│   │   ├── update_history.py
-│   │   ├── build_training_dataset.py
-│   │   ├── test_openmeteo_solar.py
-│   │   └── test_single_run.py
-│   └── model/
-│       ├── sanity_baseline.py
-│       ├── train.py                     # LK-06 tracking and V1 registration
-│       └── lk07_registry.py             # LK-07 versioning and inference smoke test
-├── reports/
-│   ├── lk06_best_model.json             # V1 registry and source provenance
-│   ├── lk06_experiment_summary.csv      # LK-06 model ranking
-│   ├── lk07_model_registry.yaml         # V1/V2 lineage + active model alias
-│   └── lk07_inference_result.json       # local smoke-test evidence
-├── tests/
-├── .dvcignore
+│   ├── data/                            # acquisition, preprocessing, DVC/bootstrap
+│   ├── model/                           # training, evaluation, registry
+│   └── serving/                         # LK-09 FastAPI and feature preparation
+├── tools/                               # LK-09 bootstrap + inference smoke test
+├── tests/                               # LK-08 and LK-09 regression tests
+├── reports/                             # LK-06/LK-07 committed evidence
+├── Dockerfile.lk09                       # LK-09 application image
+├── docker-compose.yaml                  # LK-09 service orchestration
+├── .dockerignore
 ├── .gitignore
-├── LICENSE
+├── .gitattributes
+├── .dvcignore
+├── requirements.txt
+├── requirements-lk08.txt
+├── requirements-lk09.txt
 ├── README.md
-└── requirements.txt
+└── LICENSE
 ```
 
 The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and is not part of a normal Git commit. The tracked pointer file is `data/raw/ecmwf_ifs_history.csv.dvc`.
@@ -435,11 +420,16 @@ The dataset content itself is stored in the local DVC cache (`.dvc/cache/`) and 
 | LK-07 `@production` model loading and inference smoke test | ✅ PASS (local) |
 | LK-07 DVC–MLflow lineage manifest | ✅ Completed |
 | LK-08 local code-triggered pipeline (tests, training, evaluation, staging) | ✅ PASS (local demonstration) |
-| LK-08 GitHub Actions automated execution | ⏳ Pending PR/merge verification |
+| LK-08 GitHub Actions automated execution | ✅ PASS — PR #6, run #3 on `main` ([evidence](https://github.com/maulnite/malang-solar-mlops/actions/runs/42470506087)) |
+| LK-09 Docker Compose orchestration | ✅ PASS — MLflow + FastAPI + one-shot model-init |
+| LK-09 custom bridge network and service discovery | ✅ PASS — API reached `mlflow:5000` (3.17.1) |
+| LK-09 named-volume persistence | ✅ PASS — Registry V1 and DVC MD5 preserved after Compose down/up |
+| LK-09 end-to-end inference | ✅ PASS — corrected GHI 424.1 W/m² (demo fixture) |
+| LK-08 + LK-09 regression tests | ✅ 10 passed (local) |
 | Actual production service deployment | ⏳ Not implemented |
 | Final model experimentation | ⏳ Planned (larger dataset) |
-| Model serving | ⏳ Planned |
-| Code-triggered CI and automated retraining (LK-08) | ✅ Workflow configured; hosted execution pending |
+| Model serving | ✅ LK-09 local FastAPI + MLflow Compose demo (`@staging`); production serving not implemented |
+| Code-triggered CI and automated retraining (LK-08) | ✅ PASS — GitHub-hosted test → retrain → gate → Staging (historical snapshot) |
 | Drift monitoring | ⏳ Planned |
 | Prometheus & Grafana monitoring | ⏳ Planned |
 | Automated continuous training | ⏳ Planned |
@@ -1385,7 +1375,7 @@ Local verification on 8 November 2026:
 | Relative MAE improvement | 5.102% |
 | Provisional LK-08 gate | PASS (local) |
 | Model registration and `@staging` loading | PASS (local) |
-| GitHub Actions end-to-end run | **Pending verification after PR merge** |
+| GitHub Actions end-to-end run | **PASS — workflow run #3 on `main`, 7 tests passed, training → gate → `@staging`** |
 
 This dataset is too small for a generalization claim. The figures are evidence for workflow integration, **not production model performance**.
 
@@ -1409,6 +1399,87 @@ python src/model/lk08_register.py
 ```
 
 The generated local files `lk08-mlflow.db*`, `reports/lk08/`, and MLflow artifact directories are ignored by Git. The hosted runner uses a fresh temporary SQLite tracking backend and uploads available evidence with `actions/upload-artifact`; **it is not a persistent, shared MLflow Registry**. Long-term work requires shared tracking/artifact storage, a DVC remote, fuller historical data, and label/drift-aware continuous training.
+
+---
+
+## LK-09 — Docker Compose: MLflow Tracking + Residual Correction API
+
+This coursework stack is a **multi-container demonstration**, not a publicly secured or production-ready deployment.
+It extends the LK-08 frozen DVC V2 dataset and model-quality gate. The stack is separate from the developer's local LK-07 SQLite database.
+
+### Services and dependency graph
+
+```text
+mlflow (persistent SQLite backend + artifacts volume, healthy)
+   ↓
+model-init (verified DVC fixture → training → gate → @staging, exits 0)
+   ↓
+api (FastAPI → http://mlflow:5000 → models:/MalangSolarResidualCorrectorLK08@staging)
+```
+
+Compose's custom bridge network is `solar-network`. Other containers use **service name `mlflow`**, not `localhost`, for remote MLflow calls. The MLflow backend and artifacts are stored on the named volume `mlflow_data`. The API has no direct mount of the MLflow volume; model loading proves actual inter-container communication.
+
+### Start (Docker Desktop + Compose V2)
+
+```powershell
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps -a
+docker compose logs model-init --tail 80
+python tools/lk09_smoke_test.py
+```
+
+Local UI URLs: `http://127.0.0.1:5000` (MLflow), `http://127.0.0.1:8000/docs` (FastAPI Swagger), `http://127.0.0.1:8000/model-info` (live cross-container registry lookup).
+
+`model-init` is a **one-shot job**; its status after success is `Exited (0)`, which is expected. `mlflow` and `api` should show `Up (healthy)`. The bootstrap detects an existing `@staging` alias and reuses it after Compose restarts instead of repeatedly creating versions.
+
+### Verify persistence without deleting the named volume
+
+```powershell
+docker compose down
+docker compose up -d
+docker compose ps -a
+docker compose logs model-init --tail 30
+python tools/lk09_smoke_test.py
+```
+
+The second run should report `LK09 BOOTSTRAP: REUSED existing ...`. **Do not use `docker compose down -v`** during the persistence demonstration because `-v` removes named volumes.
+
+### Evidence and scope
+
+Capture: `docker compose config --quiet` output (validation), `docker compose ps`, logs showing bootstrap and registry PASS, browser screenshots of `/model-info` + `/docs` or a successful prediction, network/service discovery (`docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://mlflow:5000/version').read().decode())"`), and persistence after down/up. The existing LK-08 model remains a small demo trained using 6 daylight rows, validated on 4; LK-01's 10% improvement KPI is not met, even though the 5% LK-08 demonstration gate passes.
+
+### Verified execution — 21 November 2026
+
+Local validation on Windows with Docker Desktop (Linux engine), Compose V2, and Python virtual environment:
+
+| Check | Actual result |
+|---|---|
+| `docker compose config --quiet` | PASS (no error) |
+| `docker compose up -d --build` | Image built; all 3 services started in the intended order |
+| `docker compose ps -a` | `mlflow` and `api` Up (healthy); one-shot `model-init` Exited (0) |
+| Bootstrap and registry | `LK09 BOOTSTRAP: PASS`, registry Version 1, alias `@staging` |
+| API health and model info | `status=ok`, `model_loaded=true`, registry lookup resolves Version 1 |
+| API → MLflow service discovery | `http://mlflow:5000/version` returned `3.17.1` from inside `api` |
+| End-to-end prediction test | PASS; raw GHI 473.0, residual −48.9, corrected GHI 424.1 W/m² |
+| Volume persistence | After `docker compose down` and `up -d`, model-init reported `REUSED ... version=1` |
+| Provenance persistence | Model version unchanged = True; DVC MD5 unchanged = True |
+| Regression tests | `python -m pytest -q tests/` → 10 passed |
+
+The sample prediction above demonstrates **successful model serving**, not verified improvement against real-time measured GHI. The model is a small historical, academic Staging candidate; LK-01's 10% performance target has not been demonstrated on the LK-08 snapshot. MLflow and the API are bound to `127.0.0.1` on the host, and this stack is **not** intended for public-facing production use.
+
+### Verification commands (PowerShell)
+
+```powershell
+docker compose ps -a
+docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://mlflow:5000/version', timeout=10).read().decode())"
+Invoke-RestMethod 'http://127.0.0.1:8000/health' | ConvertTo-Json
+Invoke-RestMethod 'http://127.0.0.1:8000/model-info' | ConvertTo-Json
+python tools/lk09_smoke_test.py
+python -m pytest -q tests/
+```
+
+Relevant source files: `docker-compose.yaml`, `Dockerfile.lk09`, `.dockerignore`, `requirements-lk09.txt`, `src/serving/lk09_api.py`, `src/serving/lk09_features.py`, `tools/lk09_bootstrap.py`, `tools/lk09_smoke_test.py`, and `tests/test_lk09.py`.
 
 ---
 
@@ -1490,7 +1561,7 @@ The LK-04 pipeline completes dynamic ingestion and automated preprocessing while
 
 ## Project Direction
 
-The repository has progressed from **problem formulation and datasource feasibility** to ingestion/preprocessing (LK-04), local dataset versioning (LK-05), MLflow experiment tracking and candidate registration (LK-06), and a manually controlled registry/inference simulation (LK-07). LK-08 adds a GitHub Actions code-triggered pipeline with locally verified test, training, evaluation, and staging steps; the hosted workflow must still be verified after merging the PR.
+The repository has progressed from **problem formulation and datasource feasibility** to ingestion/preprocessing (LK-04), local dataset versioning (LK-05), MLflow experiment tracking and candidate registration (LK-06), and a manually controlled registry/inference simulation (LK-07). LK-08 adds a GitHub Actions code-triggered pipeline that successfully executed on a hosted runner after PR #6 was merged (workflow run #3). LK-09 adds a **local Docker Compose demonstration** with a persistent MLflow Tracking/Registry service, a one-shot model bootstrap, and a FastAPI inference service. It has passed container health, service-discovery, prediction, and restart/persistence checks; this is **not a production deployment**.
 
 The following stages have now been implemented:
 
@@ -1527,11 +1598,17 @@ V1 Staging → local Production alias
         ↓
 model loading + inference smoke test PASS
         ↓
-LK08 code-triggered workflow configured
+LK08 hosted GitHub Actions workflow PASS (run #3)
         ↓
-7 pytest tests PASS (local)
+7 pytest tests PASS on GitHub runner
         ↓
-RF retraining → quality gate → @staging PASS (local)
+RF retraining → quality gate → @staging PASS
+        ↓
+LK09 Docker Compose: MLflow + model-init + FastAPI
+        ↓
+Service discovery, prediction, and volume persistence PASS
+        ↓
+10 local regression tests PASS
 ```
 
 The next major milestones are:
@@ -1541,7 +1618,7 @@ The next major milestones are:
 3. configure a shared DVC remote for reproducible `dvc push`/`dvc pull`,
 4. move local MLflow tracking and artifacts to an accessible shared backend,
 5. train and validate future challengers on a representative temporal holdout,
-6. containerize and serve a properly evaluated accepted champion model,
+6. harden the local LK-09 Docker Compose service and deploy only a properly evaluated, approved champion model,
 7. extend GitHub Actions from static-fixture, code-triggered training to scheduled data ingestion, delayed-label refresh, and drift-triggered retraining,
 8. monitor system and model performance,
 9. detect drift and performance degradation,
