@@ -1,0 +1,97 @@
+name: malang-solar-lk09
+
+x-lk09-image: &lk09-image
+  image: malang-solar-lk09:local
+  build:
+    context: .
+    dockerfile: Dockerfile.lk09
+
+x-lk09-client-env: &lk09-client-env
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  MLFLOW_EXPERIMENT_NAME: LK09-Malang-Solar-Compose
+  MLOPS_REGISTERED_MODEL_NAME: MalangSolarResidualCorrectorLK08
+  PYTHONUNBUFFERED: '1'
+
+services:
+  mlflow:
+    <<: *lk09-image
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - '5000'
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --serve-artifacts
+      - --allowed-hosts
+      - mlflow:5000,localhost:*,127.0.0.1:*
+    ports:
+      - '127.0.0.1:${LK09_MLFLOW_PORT:-5000}:5000'
+    volumes:
+      - mlflow_data:/mlflow
+    networks:
+      - solar-network
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/version', timeout=5).read()"
+      interval: 10s
+      timeout: 6s
+      start_period: 60s
+      retries: 12
+    restart: unless-stopped
+
+  model-init:
+    <<: *lk09-image
+    command: [python, tools/lk09_bootstrap.py]
+    environment: *lk09-client-env
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    networks:
+      - solar-network
+    restart: 'no'
+
+  api:
+    <<: *lk09-image
+    command:
+      - uvicorn
+      - src.serving.lk09_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8000'
+    environment: *lk09-client-env
+    ports:
+      - '127.0.0.1:${LK09_API_PORT:-8000}:8000'
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
+    networks:
+      - solar-network
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"
+      interval: 10s
+      timeout: 6s
+      start_period: 45s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  solar-network:
+    driver: bridge
+
+volumes:
+  mlflow_data:
